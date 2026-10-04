@@ -6,6 +6,12 @@ The project combines **inventory intelligence, asynchronous network diagnostics,
 
 > **Public-repository safety:** the repository contains no production inventory, company-specific addresses, company credentials, Telegram tokens, or hardcoded server passwords. Mutating operations are disabled by default with `SAFE_MODE=true`.
 
+## Public feature parity
+
+This is **not a verbatim dump of the production script**. It is a sanitized/refactored implementation that preserves the operational workflows that matter for technical verification while removing company data, embedded credentials and unsafe defaults.
+
+Command-by-command mapping is documented in [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md), and the parity/safety boundary is explained in [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md).
+
 ## Why this project exists
 
 Infrastructure teams often repeat the same operational tasks manually:
@@ -51,6 +57,7 @@ flowchart LR
 - Searches different logical column groups with `u`, `s` and `b` commands.
 - Correlates a server/network row with a nearby iLO/iDRAC/BMC management row.
 - Extracts tag, rack/unit, switch/port, network IPs and notes from the paired context.
+- Attaches inventory context to HPE/Dell/Lenovo hardware lookups.
 - Supports automatic workbook reload through `watchdog`.
 
 ### 2. Network diagnostics
@@ -67,9 +74,10 @@ flowchart LR
 - AsyncSSH connection management with retry logic.
 - Rsync orchestration for `/home` workloads.
 - Dynamic timeout calculation based on transfer size and configured bandwidth.
-- Concurrent transfer workers.
+- Controlled concurrent transfer workers.
+- Recursive **per-child splitting for very large directories**, matching the operational workflow.
 - `screen` sessions for long-running transfers.
-- Transfer/status reporting.
+- Transfer progress/status reporting.
 - Source-to-destination SSH key setup without embedding destination passwords in an rsync process command.
 
 ### 4. Linux administration
@@ -80,21 +88,23 @@ Supported workflows include:
 
 - CentOS primary and secondary IP management.
 - CentOS secondary-IP replacement.
-- CentOS 8 vault repository migration.
-- CentOS Stream 9 repository refresh.
-- Ubuntu primary/secondary IP operations.
-- Ubuntu IP replacement/removal.
+- CentOS 8.5 vault migration with BaseOS, AppStream, Extras and CentOSPlus definitions.
+- CentOS Stream 9 repository reconstruction with BaseOS, AppStream and CRB.
+- Ubuntu primary-IP changes while preserving secondary addresses.
+- Ubuntu add/replace/remove secondary-IP operations persisted through the existing Netplan YAML.
+- Netplan generation/apply after persistent changes.
 - Preventing cloud-init from overwriting network configuration.
-- Controlled Linux host bootstrap using credentials supplied through environment variables.
+- Controlled Linux host bootstrap/root-password rotation using credentials supplied through environment variables.
 
-### 5. Redfish hardware management
+### 5. Redfish hardware and account management
 
 - HPE iLO, Dell iDRAC and Lenovo-compatible Redfish queries.
 - System model, serial number and power state.
 - CPU and memory discovery.
-- Standard Redfish storage enumeration with SmartStorage fallback.
-- Password rotation using caller-configured candidate credentials.
-- Standard Redfish account creation/update.
+- Standard Redfish storage enumeration with HPE SmartStorage fallback.
+- Password rotation using caller-configured credential candidates and account discovery/fallback paths.
+- HPE Team/support account provisioning with HPE/iLO5 and HP/iLO4 payload fallbacks.
+- Lenovo hardware command aliases `li` and `le`.
 
 No production/default passwords are included in source code.
 
@@ -105,6 +115,7 @@ No production/default passwords are included in source code.
 - Admin-only controls for sensitive operations.
 - `SAFE_MODE=true` blocks server/network/password changes.
 - `ALLOW_CHAT_CREDENTIALS=false` prevents passwords from being supplied through Telegram messages by default.
+- `RETURN_GENERATED_SECRETS_IN_CHAT=false` prevents generated root/support passwords from being echoed by default.
 - Log viewing performs basic secret redaction.
 
 ## Repository structure
@@ -114,6 +125,7 @@ No production/default passwords are included in source code.
 ├── .github/workflows/ci.yml
 ├── docs/
 │   ├── FEATURE_MAP.md
+│   ├── FEATURE_PARITY.md
 │   └── SECURITY_REFACTOR.md
 ├── sample_data/
 │   └── sample_inventory.xlsx
@@ -128,6 +140,7 @@ No production/default passwords are included in source code.
 │   ├── telegram_app.py
 │   └── transfer.py
 ├── tests/
+│   └── test_parity.py
 ├── .env.example
 ├── .gitignore
 ├── main.py
@@ -183,6 +196,8 @@ ADMIN_USER_IDS=123456789
 AUTHORIZED_USER_IDS=123456789
 INVENTORY_FILE=sample_data/sample_inventory.xlsx
 SAFE_MODE=true
+ALLOW_CHAT_CREDENTIALS=false
+RETURN_GENERATED_SECRETS_IN_CHAT=false
 ```
 
 ### 4. Verify the inventory engine without Telegram
@@ -209,7 +224,7 @@ PYTHONPATH=src python main.py
 
 It preserves the realistic workbook characteristics that matter to the project:
 
-- 22 worksheets with the same kind of multi-site organization.
+- 22 worksheets with generic public names.
 - Existing row/column structure, merged cells, widths, heights, fills, borders and notes layout.
 - Alternating management/server records such as iLO/iDRAC rows and production-NIC rows.
 - Rack/unit, switch/port, bandwidth, status and free-form information fields.
@@ -231,6 +246,7 @@ The default public/demo configuration is intentionally restrictive:
 ```dotenv
 SAFE_MODE=true
 ALLOW_CHAT_CREDENTIALS=false
+RETURN_GENERATED_SECRETS_IN_CHAT=false
 REDFISH_VERIFY_TLS=true
 ```
 
@@ -245,7 +261,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The CI workflow runs compilation, tests and a simple secret-pattern scan on every push.
+The CI workflow runs compilation, tests and a committed-secret guard on every push. Parity-specific tests cover large-folder splitting, CentOS repository definitions, Netplan structure handling and safe secret defaults.
 
 ## Technologies
 
@@ -254,6 +270,7 @@ The CI workflow runs compilation, tests and a simple secret-pattern scan on ever
 - `asyncio`
 - `asyncssh`
 - `pandas` / `openpyxl`
+- `PyYAML`
 - Redfish REST APIs
 - `requests`
 - `watchdog`
@@ -264,4 +281,4 @@ The CI workflow runs compilation, tests and a simple secret-pattern scan on ever
 
 ## Portfolio note
 
-This repository is a sanitized engineering version of a tool developed to automate real infrastructure operations. Production data and credentials were intentionally excluded, while the architectural and operational concepts were retained for technical verification.
+This repository is a **sanitized engineering version with behavioral parity for the key operational workflows**, not a publication of the private production source. Production data and credentials were intentionally excluded while the technical behavior was retained for verification.
