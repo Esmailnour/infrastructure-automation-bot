@@ -71,6 +71,8 @@ async def test_centos8_repo_contains_original_vault_sections():
     for section in ("[BaseOS]", "[AppStream]", "[Extras]", "[centosplus]"):
         assert section in command
     assert "vault.centos.org" in command
+    assert "\\$releasever" in command
+    assert "\\$basearch" in command
 
 
 @pytest.mark.asyncio
