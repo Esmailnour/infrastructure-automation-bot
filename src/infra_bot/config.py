@@ -49,6 +49,7 @@ class Settings:
 
     safe_mode: bool = True
     allow_chat_credentials: bool = False
+    return_generated_secrets_in_chat: bool = False
 
     redfish_verify_tls: bool = True
     redfish_timeout_seconds: int = 12
@@ -62,9 +63,11 @@ class Settings:
     transfer_concurrency: int = 10
     parallel_split_threshold_gb: float = 1000.0
     screen_threshold_gb: float = 50.0
+    transfer_split_max_depth: int = 8
 
     bootstrap_username: str = ""
     bootstrap_password: str = ""
+    bootstrap_new_root_password: str = ""
     root_username: str = "root"
     centos_bootstrap_username: str = "root"
     centos_bootstrap_password: str = ""
@@ -72,6 +75,8 @@ class Settings:
     redfish_new_password: str = ""
     team_username: str = ""
     team_password: str = ""
+    support_account_username: str = "support"
+    support_account_password: str = ""
     redfish_password_candidates: list[str] = field(default_factory=list)
 
     @classmethod
@@ -94,6 +99,7 @@ class Settings:
             whitelist_file=Path(os.getenv("WHITELIST_FILE", "runtime/whitelist.json")),
             safe_mode=_as_bool(os.getenv("SAFE_MODE"), True),
             allow_chat_credentials=_as_bool(os.getenv("ALLOW_CHAT_CREDENTIALS"), False),
+            return_generated_secrets_in_chat=_as_bool(os.getenv("RETURN_GENERATED_SECRETS_IN_CHAT"), False),
             redfish_verify_tls=_as_bool(os.getenv("REDFISH_VERIFY_TLS"), True),
             redfish_timeout_seconds=_as_int(os.getenv("REDFISH_TIMEOUT_SECONDS"), 12),
             ssh_known_hosts=ssh_known_hosts,
@@ -104,14 +110,18 @@ class Settings:
             transfer_concurrency=_as_int(os.getenv("TRANSFER_CONCURRENCY"), 10),
             parallel_split_threshold_gb=_as_float(os.getenv("PARALLEL_SPLIT_THRESHOLD_GB"), 1000.0),
             screen_threshold_gb=_as_float(os.getenv("SCREEN_THRESHOLD_GB"), 50.0),
+            transfer_split_max_depth=_as_int(os.getenv("TRANSFER_SPLIT_MAX_DEPTH"), 8),
             bootstrap_username=os.getenv("BOOTSTRAP_USERNAME", "").strip(),
             bootstrap_password=os.getenv("BOOTSTRAP_PASSWORD", ""),
+            bootstrap_new_root_password=os.getenv("BOOTSTRAP_NEW_ROOT_PASSWORD", ""),
             root_username=os.getenv("ROOT_USERNAME", "root").strip() or "root",
             centos_bootstrap_username=os.getenv("CENTOS_BOOTSTRAP_USERNAME", "root").strip() or "root",
             centos_bootstrap_password=os.getenv("CENTOS_BOOTSTRAP_PASSWORD", ""),
             redfish_new_password=os.getenv("REDFISH_NEW_PASSWORD", ""),
             team_username=os.getenv("TEAM_USERNAME", "").strip(),
             team_password=os.getenv("TEAM_PASSWORD", ""),
+            support_account_username=os.getenv("SUPPORT_ACCOUNT_USERNAME", "support").strip() or "support",
+            support_account_password=os.getenv("SUPPORT_ACCOUNT_PASSWORD", ""),
             redfish_password_candidates=_csv_list(os.getenv("REDFISH_PASSWORD_CANDIDATES")),
         )
 

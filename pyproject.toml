@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "infrastructure-automation-bot"
-version = "1.0.0"
+version = "1.1.0"
 description = "Portfolio-safe infrastructure automation and server-management Telegram bot"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,6 +16,7 @@ dependencies = [
   "python-telegram-bot>=22,<23",
   "watchdog>=6,<7",
   "python-dotenv>=1.0,<2",
+  "PyYAML>=6,<7",
 ]
 
 [project.scripts]
