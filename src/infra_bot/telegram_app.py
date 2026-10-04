@@ -10,19 +10,19 @@ from telegram.ext import Application, CallbackContext, CommandHandler, MessageHa
 
 from .auth import AccessController
 from .config import Settings
+from .hostutils import parse_host_port
 from .inventory import InventoryStore, InventoryWatcher, format_matches
 from .linux_admin import LinuxAdmin
 from .network import detect_ssh_ports, is_tcp_open, ping_subnet, validate_ip
 from .redfish import (
     RedfishClient,
     RedfishCredentials,
-    change_account_password,
-    ensure_account,
+    change_named_account_password,
+    ensure_hpe_support_workflow,
     get_hardware_info,
     random_password,
 )
 from .ssh_client import SSHCredentials, SSHRunner
-from .hostutils import parse_host_port
 from .transfer import TransferEndpoint, TransferManager
 
 LOGGER = logging.getLogger(__name__)
@@ -110,6 +110,17 @@ def _credentials_from_args_or_env(services: BotServices, args: list[str]) -> Red
     )
 
 
+def _secret_for_operation(settings: Settings, configured: str, purpose: str) -> tuple[str, bool]:
+    if configured:
+        return configured, False
+    if settings.return_generated_secrets_in_chat:
+        return random_password(18), True
+    raise ValueError(
+        f"{purpose} needs a configured secret. Set the corresponding environment variable, or set "
+        "RETURN_GENERATED_SECRETS_IN_CHAT=true only in an authorized environment."
+    )
+
+
 async def start(update: Update, context: CallbackContext, services: BotServices) -> None:
     if not await _require_authorized(update, services):
         return
@@ -138,13 +149,13 @@ Diagnostics
   /ping                             Bot health check
 
 Server hardware / Redfish
-  hp <iLO_IP> [USER PASS]           HPE/iLO hardware information
-  di <iDRAC_IP> [USER PASS]         Dell/iDRAC hardware information
-  li <Lenovo_IP> [USER PASS]        Lenovo Redfish hardware information
+  hp <iLO_IP> [USER PASS]           HPE/iLO hardware + inventory context
+  di <iDRAC_IP> [USER PASS]         Dell/iDRAC hardware + inventory context
+  li|le <Lenovo_IP> [USER PASS]     Lenovo Redfish hardware + inventory context
   p <iDRAC_IP>                      Admin: rotate configured Dell account password
   h <iLO_IP>                        Admin: rotate configured HPE account password
-  l <Lenovo_IP>                     Admin: rotate configured Lenovo account password
-  hr <iLO_IP> [ADMIN_USER PASS]     Admin: create/update support account
+  l <Lenovo_IP> [OLD_PASS]          Admin: rotate configured Lenovo account password
+  hr <iLO_IP> [ADMIN_USER PASS]     Admin: create/update Team + support accounts
 
 Linux administration (Admin; disabled in SAFE_MODE)
   n <IP>                             Bootstrap a Linux host using env credentials
@@ -162,6 +173,7 @@ Linux administration (Admin; disabled in SAFE_MODE)
 
 Data transfer (Admin; disabled in SAFE_MODE)
   /m <SRC[:PORT]> <USER> <PASS> <DST[:PORT]> <USER> <PASS>
+     Recursively sync /home and split very large directories by child item
   /status <SRC[:PORT]> <USER> <PASS> <DST[:PORT]> <USER> <PASS>
   /progress <SRC[:PORT]> <USER> <PASS>
   /sessions <1-50>
@@ -175,6 +187,7 @@ Access / operations
 Security defaults
   SAFE_MODE=true blocks server/password/network mutations.
   ALLOW_CHAT_CREDENTIALS=false blocks commands that pass passwords in Telegram messages.
+  RETURN_GENERATED_SECRETS_IN_CHAT=false prevents generated passwords being echoed to chat.
 """
     await _reply_chunks(update, text)
 
@@ -304,7 +317,8 @@ async def handle_bandwidth(update: Update, context: CallbackContext, services: B
         f"Total modelled bandwidth: {s.total_bandwidth_gbps:g} Gbps\n"
         f"Max parallel sessions: {s.max_parallel_sessions}\n"
         f"Modelled bandwidth/session: {s.min_bandwidth_per_session_gbps:.2f} Gbps\n"
-        f"Transfer workers: {s.transfer_concurrency}",
+        f"Transfer workers: {s.transfer_concurrency}\n"
+        f"Split threshold: {s.parallel_split_threshold_gb:g} GB",
     )
 
 
@@ -456,22 +470,37 @@ async def handle_text(update: Update, context: CallbackContext, services: BotSer
             missing_hint = "Configure BOOTSTRAP_USERNAME and BOOTSTRAP_PASSWORD first."
         if not bootstrap_user or not bootstrap_password:
             return await _reply_chunks(update, missing_hint)
-        new_root_password = random_password(18)
+        new_root_password, reveal = _secret_for_operation(
+            services.settings,
+            services.settings.bootstrap_new_root_password,
+            "Host bootstrap",
+        )
         msg = await services.linux.bootstrap_host(
             validate_ip(args[1]),
             bootstrap_user,
             bootstrap_password,
             new_root_password,
         )
-        await _reply_chunks(update, f"{msg}\nRoot password rotated successfully. Store the new secret securely.")
+        reply = f"{msg}\nRoot password rotated successfully."
+        if reveal:
+            reply += f"\nroot\n{new_root_password}"
+        else:
+            reply += "\nThe new root password came from BOOTSTRAP_NEW_ROOT_PASSWORD and was not echoed."
+        await _reply_chunks(update, reply)
         return
 
     if command in {"p", "h", "l"}:
         if not await _require_admin(update, services): return
         services.settings.require_mutations_enabled("Redfish password rotation")
-        if len(args) != 2: return await _reply_chunks(update, f"Usage: {command} <management_IP>")
+        if command == "l" and len(args) not in (2, 3):
+            return await _reply_chunks(update, "Usage: l <Lenovo_IP> [OLD_PASSWORD]")
+        if command != "l" and len(args) != 2:
+            return await _reply_chunks(update, f"Usage: {command} <management_IP>")
         host = validate_ip(args[1])
-        candidates = services.settings.redfish_password_candidates
+        candidates = list(services.settings.redfish_password_candidates)
+        if command == "l" and len(args) == 3:
+            services.settings.require_chat_credentials_enabled()
+            candidates.insert(0, args[2])
         new_password = services.settings.redfish_new_password
         if not candidates or not new_password:
             return await _reply_chunks(
@@ -487,10 +516,16 @@ async def handle_text(update: Update, context: CallbackContext, services: BotSer
         else:
             username = "USERID"
             paths = ["/redfish/v1/AccountService/Accounts/1"]
-        _, status = await asyncio.to_thread(
-            change_account_password, host, services.settings, username, candidates, new_password, paths
+        _, status, path = await asyncio.to_thread(
+            change_named_account_password,
+            host,
+            services.settings,
+            username,
+            candidates,
+            new_password,
+            paths,
         )
-        await _reply_chunks(update, f"Password rotation completed for {host} (HTTP {status}).")
+        await _reply_chunks(update, f"Password rotation completed for {host} (HTTP {status}, account {path}).")
         return
 
     if command == "hr":
@@ -506,23 +541,44 @@ async def handle_text(update: Update, context: CallbackContext, services: BotSer
             admin = RedfishCredentials(services.settings.team_username, services.settings.team_password)
         else:
             return await _reply_chunks(update, "Configure TEAM_USERNAME/TEAM_PASSWORD or supply admin credentials.")
-        support_password = random_password(18)
-        href = await asyncio.to_thread(
-            ensure_account, host, services.settings, admin, "support", support_password, "Administrator"
+
+        support_password, reveal = _secret_for_operation(
+            services.settings,
+            services.settings.support_account_password,
+            "HPE support-account provisioning",
         )
-        await _reply_chunks(update, f"Support account created/updated at {href}. Store the generated password securely.")
+        provisioned = await asyncio.to_thread(
+            ensure_hpe_support_workflow,
+            host,
+            services.settings,
+            admin,
+            support_username=services.settings.support_account_username,
+            support_password=support_password,
+            team_username=services.settings.team_username,
+            team_password=services.settings.team_password,
+        )
+        lines = [f"{item.username}: {item.action} ({item.path})" for item in provisioned]
+        if reveal:
+            lines.append(f"{services.settings.support_account_username}\n{support_password}")
+        else:
+            lines.append("Support password was sourced from SUPPORT_ACCOUNT_PASSWORD and was not echoed.")
+        await _reply_chunks(update, "HPE account workflow complete:\n" + "\n".join(lines))
         return
 
-    if command in {"hp", "di", "li"}:
+    if command in {"hp", "di", "li", "le"}:
         if len(args) not in (2, 4):
             return await _reply_chunks(update, f"Usage: {command} <management_IP> [USER PASS]")
         host = validate_ip(args[1])
         try:
             credentials = _credentials_from_args_or_env(services, args)
-            vendor = {"hp": "HPE", "di": "Dell", "li": "Lenovo"}[command]
+            vendor = {"hp": "HPE", "di": "Dell", "li": "Lenovo", "le": "Lenovo"}[command]
             client = RedfishClient(host, credentials, services.settings)
             info = await asyncio.to_thread(get_hardware_info, client, vendor)
-            await _reply_chunks(update, info.to_text())
+            reply = info.to_text()
+            inventory_matches = services.inventory.search(host, mode="s", exact_match=True)
+            if inventory_matches:
+                reply += "\n\nInventory context:\n" + format_matches(inventory_matches[:1])[0]
+            await _reply_chunks(update, reply)
         except Exception as exc:
             await _reply_chunks(update, f"Hardware lookup failed: {exc}")
         return
@@ -586,7 +642,7 @@ def create_application(settings: Settings | None = None) -> tuple[Application, B
 
 def run_bot() -> None:
     app, services = create_application()
-    observer = services.watcher.start()
+    services.watcher.start()
     try:
         LOGGER.info("Starting Telegram polling; SAFE_MODE=%s", services.settings.safe_mode)
         app.run_polling()

@@ -42,6 +42,13 @@ class HardwareInfo:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class AccountProvisionResult:
+    username: str
+    path: str
+    action: str
+
+
 class RedfishClient:
     def __init__(self, host: str, credentials: RedfishCredentials, settings: Settings):
         self.host = host.strip()
@@ -117,6 +124,8 @@ def _member_json(client: RedfishClient, collection_path: str) -> list[dict[str, 
         except requests.RequestException:
             continue
         if data:
+            data = dict(data)
+            data.setdefault("@odata.id", str(href))
             result.append(data)
     return result
 
@@ -143,13 +152,12 @@ def get_hardware_info(client: RedfishClient, vendor_hint: str = "Redfish") -> Ha
         serial_number=str(system.get("SerialNumber") or "Unknown"),
         power_state=str(system.get("PowerState") or "Unknown"),
     )
-    memory_mib = system.get("MemorySummary", {}).get("TotalSystemMemoryGiB") if isinstance(system.get("MemorySummary"), dict) else None
-    if isinstance(memory_mib, (int, float)):
-        info.memory_gib = float(memory_mib)
-    else:
-        memory_gib = system.get("MemorySummary", {}).get("TotalSystemMemoryGB") if isinstance(system.get("MemorySummary"), dict) else None
-        if isinstance(memory_gib, (int, float)):
-            info.memory_gib = float(memory_gib)
+    memory_summary = system.get("MemorySummary") if isinstance(system.get("MemorySummary"), dict) else {}
+    memory = memory_summary.get("TotalSystemMemoryGiB")
+    if memory is None:
+        memory = memory_summary.get("TotalSystemMemoryGB")
+    if isinstance(memory, (int, float)):
+        info.memory_gib = float(memory)
 
     proc_summary = system.get("ProcessorSummary") if isinstance(system.get("ProcessorSummary"), dict) else {}
     model = proc_summary.get("Model")
@@ -178,17 +186,75 @@ def get_hardware_info(client: RedfishClient, vendor_hint: str = "Redfish") -> Ha
                 continue
             if drive:
                 drives.append(_capacity_text(drive))
+
     if not drives:
-        smart_root = system_path.rstrip("/") + "/SmartStorage/ArrayControllers/"
-        controllers = _member_json(client, smart_root)
-        for controller in controllers:
-            href = controller.get("@odata.id")
-            if not href:
-                continue
-            for drive in _member_json(client, str(href).rstrip("/") + "/DiskDrives/"):
-                drives.append(_capacity_text(drive))
+        smart_roots = [
+            system_path.rstrip("/") + "/SmartStorage/ArrayControllers/",
+            "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/",
+        ]
+        for smart_root in smart_roots:
+            controllers = _member_json(client, smart_root)
+            for controller in controllers:
+                href = controller.get("@odata.id")
+                if not href:
+                    continue
+                for drive in _member_json(client, str(href).rstrip("/") + "/DiskDrives/"):
+                    drives.append(_capacity_text(drive))
+            if drives:
+                break
     info.drives = drives
     return info
+
+
+def _account_collection(client: RedfishClient) -> str:
+    service = client.get_json("/redfish/v1/AccountService/", allow_404=True) or {}
+    accounts = service.get("Accounts")
+    if isinstance(accounts, dict) and accounts.get("@odata.id"):
+        return str(accounts["@odata.id"])
+    return "/redfish/v1/AccountService/Accounts/"
+
+
+def _find_account(client: RedfishClient, username: str) -> tuple[str, dict[str, Any]] | None:
+    collection = _account_collection(client)
+    for account in _member_json(client, collection):
+        if str(account.get("UserName", "")).strip().lower() == username.strip().lower():
+            return str(account.get("@odata.id")), account
+    return None
+
+
+def change_named_account_password(
+    host: str,
+    settings: Settings,
+    username: str,
+    old_passwords: Iterable[str],
+    new_password: str,
+    fallback_paths: Iterable[str] = (),
+) -> tuple[str, int, str]:
+    settings.require_mutations_enabled("Redfish password change")
+    if not new_password:
+        raise ValueError("new_password must not be empty")
+    last_status = 0
+    for old_password in old_passwords:
+        if not old_password:
+            continue
+        client = RedfishClient(host, RedfishCredentials(username, old_password), settings)
+        paths: list[str] = []
+        try:
+            found = _find_account(client, username)
+            if found:
+                paths.append(found[0])
+        except requests.RequestException:
+            pass
+        paths.extend(str(p) for p in fallback_paths if p not in paths)
+        for path in paths:
+            try:
+                response = client.request("PATCH", path, json={"Password": new_password})
+            except requests.RequestException:
+                continue
+            last_status = response.status_code
+            if response.status_code in (200, 202, 204):
+                return old_password, response.status_code, path
+    raise RuntimeError(f"Password change failed; last HTTP status: {last_status or 'n/a'}")
 
 
 def change_account_password(
@@ -199,23 +265,15 @@ def change_account_password(
     new_password: str,
     account_paths: Iterable[str],
 ) -> tuple[str, int]:
-    settings.require_mutations_enabled("Redfish password change")
-    if not new_password:
-        raise ValueError("new_password must not be empty")
-    last_status = 0
-    for old_password in old_passwords:
-        if not old_password:
-            continue
-        client = RedfishClient(host, RedfishCredentials(username, old_password), settings)
-        for path in account_paths:
-            try:
-                response = client.request("PATCH", path, json={"Password": new_password})
-            except requests.RequestException:
-                continue
-            last_status = response.status_code
-            if response.status_code in (200, 202, 204):
-                return old_password, response.status_code
-    raise RuntimeError(f"Password change failed; last HTTP status: {last_status or 'n/a'}")
+    old, status, _ = change_named_account_password(
+        host,
+        settings,
+        username,
+        old_passwords,
+        new_password,
+        account_paths,
+    )
+    return old, status
 
 
 def random_password(length: int = 18) -> str:
@@ -224,6 +282,30 @@ def random_password(length: int = 18) -> str:
         value = "".join(secrets.choice(alphabet) for _ in range(length))
         if any(c.islower() for c in value) and any(c.isupper() for c in value) and any(c.isdigit() for c in value):
             return value
+
+
+def _hpe_payloads(username: str, password: str, role_id: str) -> list[dict[str, Any]]:
+    full_privileges = {
+        "LoginPriv": True,
+        "RemoteConsolePriv": True,
+        "VirtualPowerAndResetPriv": True,
+        "VirtualMediaPriv": True,
+    }
+    return [
+        {
+            "UserName": username,
+            "Password": password,
+            "RoleId": role_id,
+            "Enabled": True,
+            "Oem": {"Hpe": {"LoginName": username}},
+        },
+        {
+            "UserName": username,
+            "Password": password,
+            "Enabled": True,
+            "Oem": {"Hp": {"LoginName": username, "Privileges": full_privileges}},
+        },
+    ]
 
 
 def ensure_account(
@@ -236,18 +318,66 @@ def ensure_account(
 ) -> str:
     settings.require_mutations_enabled("Redfish account management")
     client = RedfishClient(host, admin_credentials, settings)
-    collection_path = "/redfish/v1/AccountService/Accounts/"
-    collection = client.get_json(collection_path) or {}
-    for member in collection.get("Members") or []:
-        href = member.get("@odata.id") if isinstance(member, dict) else None
-        if not href:
-            continue
-        account = client.get_json(str(href), allow_404=True)
-        if account and str(account.get("UserName", "")).lower() == username.lower():
-            client.patch_json(str(href), {"Password": password, "RoleId": role_id, "Enabled": True})
-            return str(href)
-    response = client.post_json(
-        collection_path,
-        {"UserName": username, "Password": password, "RoleId": role_id, "Enabled": True},
+    collection_path = _account_collection(client)
+    found = _find_account(client, username)
+    payloads = _hpe_payloads(username, password, role_id) + [
+        {"UserName": username, "Password": password, "RoleId": role_id, "Enabled": True}
+    ]
+
+    last_error = ""
+    if found:
+        href = found[0]
+        for payload in payloads:
+            try:
+                response = client.request("PATCH", href, json=payload)
+                if response.status_code in (200, 202, 204):
+                    return href
+                last_error = f"HTTP {response.status_code}: {response.text[:300]}"
+            except requests.RequestException as exc:
+                last_error = str(exc)
+        raise RuntimeError(f"Could not update Redfish account {username}: {last_error}")
+
+    for payload in payloads:
+        try:
+            response = client.request("POST", collection_path, json=payload)
+            if response.status_code in (200, 201, 202, 204):
+                return response.headers.get("Location", collection_path)
+            last_error = f"HTTP {response.status_code}: {response.text[:300]}"
+        except requests.RequestException as exc:
+            last_error = str(exc)
+    raise RuntimeError(f"Could not create Redfish account {username}: {last_error}")
+
+
+def ensure_hpe_support_workflow(
+    host: str,
+    settings: Settings,
+    admin_credentials: RedfishCredentials,
+    *,
+    support_username: str,
+    support_password: str,
+    team_username: str = "",
+    team_password: str = "",
+) -> list[AccountProvisionResult]:
+    settings.require_mutations_enabled("HPE account provisioning")
+    results: list[AccountProvisionResult] = []
+    if team_username and team_password:
+        team_path = ensure_account(
+            host,
+            settings,
+            admin_credentials,
+            team_username,
+            team_password,
+            role_id="Administrator",
+        )
+        results.append(AccountProvisionResult(team_username, team_path, "created-or-updated"))
+
+    support_path = ensure_account(
+        host,
+        settings,
+        admin_credentials,
+        support_username,
+        support_password,
+        role_id="Operator",
     )
-    return response.headers.get("Location", collection_path)
+    results.append(AccountProvisionResult(support_username, support_path, "created-or-updated"))
+    return results
