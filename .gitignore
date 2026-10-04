@@ -1,0 +1,41 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime/private data
+runtime/*
+!runtime/.gitkeep
+logs.log
+*.log
+unused.txt
+ips_not_found.txt
+between_ip.txt
+subnet_ips_not_found.txt
+
+# Production inventory: keep only the sanitized sample workbook
+*.xlsx
+!sample_data/sample_inventory.xlsx
+*.xls
+*.xlsm
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

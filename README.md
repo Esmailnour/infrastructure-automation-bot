@@ -4,7 +4,7 @@ A portfolio-safe refactor of a real Python infrastructure automation tool origin
 
 The project combines **inventory intelligence, asynchronous network diagnostics, Linux administration, Redfish hardware management, and server-to-server data transfer orchestration** in one controlled interface.
 
-> **Public-repository safety:** the repository contains no production inventory, private IP inventory, company credentials, Telegram tokens, or hardcoded server passwords. Mutating operations are disabled by default with `SAFE_MODE=true`.
+> **Public-repository safety:** the repository contains no production inventory, company-specific addresses, company credentials, Telegram tokens, or hardcoded server passwords. Mutating operations are disabled by default with `SAFE_MODE=true`.
 
 ## Why this project exists
 
@@ -190,7 +190,7 @@ SAFE_MODE=true
 A recruiter or reviewer can test the core inventory logic without a bot token:
 
 ```bash
-PYTHONPATH=src python -m infra_bot.demo s 192.0.2.10
+PYTHONPATH=src python -m infra_bot.demo s 198.18.24.141
 ```
 
 Expected output includes the synthetic asset tag, rack/unit, switch port and paired network IPs.
@@ -205,21 +205,24 @@ PYTHONPATH=src python main.py
 
 ## Demo inventory
 
-`sample_data/sample_inventory.xlsx` contains only synthetic RFC 5737 TEST-NET addresses:
+`sample_data/sample_inventory.xlsx` is a large, sanitized demo workbook derived from the **layout and sheet structure** of the operational inventory while replacing the original environment data.
 
-- `192.0.2.0/24`
-- `198.51.100.0/24`
-- `203.0.113.0/24`
+It preserves the realistic workbook characteristics that matter to the project:
 
-The workbook intentionally includes paired management/server rows and blank cells so the inventory loader can demonstrate the same forward-fill and pairing behavior without exposing private infrastructure data.
+- 22 worksheets with the same kind of multi-site organization.
+- Existing row/column structure, merged cells, widths, heights, fills, borders and notes layout.
+- Alternating management/server records such as iLO/iDRAC rows and production-NIC rows.
+- Rack/unit, switch/port, bandwidth, status and free-form information fields.
+- Synthetic/non-production IP values, primarily using RFC 2544 benchmarking space (`198.18.0.0/15`) and documentation-style values where appropriate.
+- Demo-only tags, names, credentials and notes; the original operational values are not published.
 
 Example search:
 
 ```text
-s 192.0.2.10
+s 198.18.24.141
 ```
 
-The inventory engine can correlate that management IP with the associated server row and return its tag, rack/unit, switch/port and network IPs.
+The inventory engine correlates that synthetic management IP with its paired server row and returns the demo tag, rack/unit, switch/port and network IPs.
 
 ## Safety model
 
