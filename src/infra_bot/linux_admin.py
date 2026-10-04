@@ -71,29 +71,29 @@ mkdir -p "${BACKUP_DIR}"
 mv /etc/yum.repos.d/CentOS-*.repo "${BACKUP_DIR}/" 2>/dev/null || true
 cat > "${NEW_REPO}" <<EOF
 [BaseOS]
-name=CentOS-$releasever - BaseOS
-baseurl=${VAULT}/BaseOS/$basearch/os/
+name=CentOS-\$releasever - BaseOS
+baseurl=${VAULT}/BaseOS/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
 
 [AppStream]
-name=CentOS-$releasever - AppStream
-baseurl=${VAULT}/AppStream/$basearch/os/
+name=CentOS-\$releasever - AppStream
+baseurl=${VAULT}/AppStream/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
 
 [Extras]
-name=CentOS-$releasever - Extras
-baseurl=${VAULT}/extras/$basearch/os/
+name=CentOS-\$releasever - Extras
+baseurl=${VAULT}/extras/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
 
 [centosplus]
-name=CentOS-$releasever - CentOSPlus
-baseurl=${VAULT}/centosplus/$basearch/os/
+name=CentOS-\$releasever - CentOSPlus
+baseurl=${VAULT}/centosplus/\$basearch/os/
 gpgcheck=1
 enabled=0
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial
