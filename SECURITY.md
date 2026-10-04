@@ -20,6 +20,10 @@ The repository `.gitignore` blocks the common local paths, but secret scanning a
 
 `ALLOW_CHAT_CREDENTIALS=false` is also the default because chat messages are not recommended as a secret-transport mechanism.
 
+`RETURN_GENERATED_SECRETS_IN_CHAT=false` prevents generated root/support passwords from being echoed to Telegram by default. For public-safe operation, configure `BOOTSTRAP_NEW_ROOT_PASSWORD` and `SUPPORT_ACCOUNT_PASSWORD` outside chat instead.
+
+Redfish TLS verification and normal SSH host-key verification are enabled by default.
+
 ## Reporting
 
 If this repository is published and a secret is accidentally committed:
